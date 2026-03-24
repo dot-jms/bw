@@ -351,6 +351,29 @@ const TEX_NAMES = [
 const ZIP_PATH = '/texture/Bare_Bones_1_13-1_14.zip';
 const zipBlobs = {}; // name -> objectURL
 
+// Map from game texture names → zip filenames (1.13+ renamed textures)
+const TEX_REMAP = {
+  'wool_white':'white_wool','wool_red':'red_wool','wool_blue':'blue_wool',
+  'wool_green':'green_wool','wool_yellow':'yellow_wool','wool_cyan':'cyan_wool',
+  'wool_orange':'orange_wool','wool_magenta':'magenta_wool','wool_pink':'pink_wool',
+  'wool_lime':'lime_wool','wool_purple':'purple_wool','wool_light_blue':'light_blue_wool',
+  'wool_gray':'gray_wool','wool_light_gray':'light_gray_wool','wool_brown':'brown_wool',
+  'wool_black':'black_wool',
+  'planks':'oak_planks',
+  'endstone':'end_stone',
+  'grass_top':'grass_block_top',
+  'grass_side':'grass_block_side',
+  'tnt':'tnt_side',
+  'auto_turret':'dispenser_front',
+  'nanobot_cloud':'redstone_block',
+  'kinetic_shield':'iron_block',
+  'alarm_block':'redstone_lamp',
+  'platform_block':'oak_planks',
+  'rescue_platform':'oak_planks',
+  'bridge_egg':'ender_pearl',
+  'speed_potion':'potion','jump_potion':'potion','invisibility_potion':'potion','regen_potion':'potion',
+};
+
 async function loadTextureZip() {
   showStatus('📦 Loading texture pack...');
   try {
@@ -361,7 +384,6 @@ async function loadTextureZip() {
     const loads = [];
     zip.forEach((relPath, file) => {
       if (file.dir || !relPath.endsWith('.png')) return;
-      // Extract texture name from path like assets/minecraft/textures/block/wool.png
       const parts = relPath.split('/');
       const fname = parts[parts.length - 1].replace('.png', '');
       loads.push(
@@ -371,6 +393,12 @@ async function loadTextureZip() {
       );
     });
     await Promise.all(loads);
+    // Apply remaps so game names resolve to zip blobs
+    for (const [gameName, zipName] of Object.entries(TEX_REMAP)) {
+      if (zipBlobs[zipName] && !zipBlobs[gameName]) {
+        zipBlobs[gameName] = zipBlobs[zipName];
+      }
+    }
     showStatus(`✅ Texture pack loaded (${Object.keys(zipBlobs).length} textures)!`);
   } catch(e) {
     showStatus('⚠ Texture pack not found — using fallback colors.');
@@ -1324,8 +1352,8 @@ function setupInput() {
   });
   canvas.addEventListener('mousemove', e => {
     if(!mouseLocked) return;
-    me.yaw+=e.movementX*0.002;
-    me.pitch=Math.max(-Math.PI/2+0.01,Math.min(Math.PI/2-0.01,me.pitch-e.movementY*0.002));
+    me.yaw -= e.movementX*0.002;
+    me.pitch=Math.max(-Math.PI/2+0.01,Math.min(Math.PI/2-0.01,me.pitch+e.movementY*0.002));
   });
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
   canvas.addEventListener('wheel',e=>{
