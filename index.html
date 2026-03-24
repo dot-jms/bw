@@ -254,7 +254,8 @@ canvas { display:block; }
 // ===================== CONFIG =====================
 const SERVER_URL = 'wss://bwu.dot-jms.deno.net/';
 const TEXTURE_BASE = '/texture/assets/minecraft/textures/';
-const RENDER_DISTANCE = 24;
+const RENDER_DISTANCE = 12; // 24 was way too high for a 2D canvas renderer
+const MAX_FACES_PER_FRAME = 300; // hard budget — canvas clip() is expensive
 const FOV = 70;
 const GRAVITY = 0.009;
 const JUMP_FORCE = 0.18;
@@ -872,20 +873,24 @@ function drawBlockFace(bx,by,bz,blockType) {
     const avgZ=sv.reduce((s,v)=>s+v.z,0)/4;
     if(avgZ<0.1) continue;
 
+    // Skip faces that are too small to see (far away)
+    const minX=Math.min(sv[0].x,sv[1].x,sv[2].x,sv[3].x);
+    const maxX=Math.max(sv[0].x,sv[1].x,sv[2].x,sv[3].x);
+    const minY=Math.min(sv[0].y,sv[1].y,sv[2].y,sv[3].y);
+    const maxY=Math.max(sv[0].y,sv[1].y,sv[2].y,sv[3].y);
+    const W=Math.max(1,maxX-minX), H=Math.max(1,maxY-minY);
+    if(W < 2 && H < 2) continue; // sub-pixel face, skip it
+    _faceBudget--;
+
+    const tex=textures[face.tex]||textures[blockType]||textures[blockType+'_top'];
+
+    ctx.save();
     ctx.beginPath();
     ctx.moveTo(sv[0].x,sv[0].y);
     for(let i=1;i<sv.length;i++) ctx.lineTo(sv[i].x,sv[i].y);
     ctx.closePath();
-
-    const tex=textures[face.tex]||textures[blockType]||textures[blockType+'_top'];
-    const minX=Math.min(sv[0].x,sv[1].x,sv[2].x,sv[3].x);
-    const minY=Math.min(sv[0].y,sv[1].y,sv[2].y,sv[3].y);
-    const maxX=Math.max(sv[0].x,sv[1].x,sv[2].x,sv[3].x);
-    const maxY=Math.max(sv[0].y,sv[1].y,sv[2].y,sv[3].y);
-    const W=Math.max(1,maxX-minX), H=Math.max(1,maxY-minY);
-
-    ctx.save();
     ctx.clip();
+
     if(tex) {
       ctx.globalAlpha=isWater?0.6:1;
       ctx.imageSmoothingEnabled=false;
@@ -1052,10 +1057,15 @@ function drawBedMarker(island) {
 }
 
 // Main render
+let _faceBudget = 0;
 function render() {
-  if(!gameActive){ requestAnimationFrame(render); return; }
+  if(!gameActive) return;
   drawSky();
-  for(const vb of getVisibleBlocks()) drawBlockFace(vb.bx,vb.by,vb.bz,vb.type);
+  _faceBudget = MAX_FACES_PER_FRAME;
+  for(const vb of getVisibleBlocks()) {
+    if(_faceBudget <= 0) break;
+    drawBlockFace(vb.bx,vb.by,vb.bz,vb.type);
+  }
   for(const isle of islands) if(isle) drawBedMarker(isle);
   for(const[,drop] of droppedItems) drawDroppedItem(drop);
   for(const[,proj] of projectiles) drawProjectile(proj);
@@ -1088,7 +1098,15 @@ function render() {
   }
 
   drawMinimap();
-  requestAnimationFrame(render);
+
+  // Debug overlay
+  const facesDrawn = MAX_FACES_PER_FRAME - _faceBudget;
+  ctx.fillStyle='rgba(0,0,0,0.55)';
+  ctx.fillRect(canvas.width-170, 0, 170, 38);
+  ctx.fillStyle='#0f0'; ctx.font='11px monospace'; ctx.textAlign='right';
+  ctx.fillText(`FPS: ${_fps} | faces: ${facesDrawn}`, canvas.width-6, 14);
+  ctx.fillText(`vis blocks: ${_visCache.length} | RD:${RENDER_DISTANCE}`, canvas.width-6, 28);
+  ctx.textAlign='left';
 }
 
 // ===================== MINIMAP =====================
@@ -1392,12 +1410,17 @@ function networkTick(){
 }
 
 // ===================== GAME LOOP =====================
-let lastTick=0, lastRender=0;
+let lastTick=0, lastRender=0, _fps=0, _fpsCount=0, _fpsTime=0;
 function gameLoop(ts){
   const dt=Math.min(ts-lastTick,100); lastTick=ts;
   if(gameActive){ physicsStep(dt); networkTick(); }
-  // Cap at ~60fps - skip render frames if running too fast
-  if(ts-lastRender >= 14) { // ~70fps max
+
+  // FPS counter
+  _fpsCount++;
+  if(ts-_fpsTime>=1000){ _fps=_fpsCount; _fpsCount=0; _fpsTime=ts; }
+
+  // Render — capped at ~60fps
+  if(ts-lastRender >= 16) {
     render();
     lastRender=ts;
   }
