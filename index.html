@@ -613,6 +613,7 @@ function handleServerMsg(msg) {
       for (const isle of msg.islands) islands[isle.id] = isle;
       shopItems = Object.keys(msg.shopItems||{}).length ? msg.shopItems : DEFAULT_SHOP;
       me.pos = {...msg.pos};
+      markBlocksDirty();
       document.getElementById('login-screen').style.display = 'none';
       gameActive = true;
       requestPointerLock();
@@ -656,12 +657,15 @@ function handleServerMsg(msg) {
 
     case 'block_placed':
       blocks.set(`${Math.round(msg.pos.x)},${Math.round(msg.pos.y)},${Math.round(msg.pos.z)}`, msg.blockType);
+      markBlocksDirty();
       break;
     case 'block_broken':
       blocks.delete(`${Math.round(msg.pos.x)},${Math.round(msg.pos.y)},${Math.round(msg.pos.z)}`);
+      markBlocksDirty();
       break;
     case 'blocks_destroyed':
       for (const p of msg.positions) blocks.delete(`${Math.round(p.x)},${Math.round(p.y)},${Math.round(p.z)}`);
+      markBlocksDirty();
       if(msg.positions.length) showExplosionEffect(msg.positions[0]);
       break;
 
@@ -856,6 +860,7 @@ function drawBlockFace(bx,by,bz,blockType) {
     {verts:[[bx-HALF,by-HALF,bz-HALF],[bx-HALF,by-HALF,bz+HALF],[bx-HALF,by+HALF,bz+HALF],[bx-HALF,by+HALF,bz-HALF]],n:[-1,0,0],shade:0.65,tex:blockType+'_side'},
   ];
 
+  const isWater=blockType==='water';
   for (const face of faces) {
     const dot=face.n[0]*camDir[0]+face.n[1]*camDir[1]+face.n[2]*camDir[2];
     if(dot<=0) continue;
@@ -867,25 +872,24 @@ function drawBlockFace(bx,by,bz,blockType) {
     const avgZ=sv.reduce((s,v)=>s+v.z,0)/4;
     if(avgZ<0.1) continue;
 
-    ctx.save();
     ctx.beginPath();
     ctx.moveTo(sv[0].x,sv[0].y);
     for(let i=1;i<sv.length;i++) ctx.lineTo(sv[i].x,sv[i].y);
     ctx.closePath();
-    ctx.clip();
 
     const tex=textures[face.tex]||textures[blockType]||textures[blockType+'_top'];
-    const minX=Math.min(...sv.map(v=>v.x));
-    const minY=Math.min(...sv.map(v=>v.y));
-    const maxX=Math.max(...sv.map(v=>v.x));
-    const maxY=Math.max(...sv.map(v=>v.y));
+    const minX=Math.min(sv[0].x,sv[1].x,sv[2].x,sv[3].x);
+    const minY=Math.min(sv[0].y,sv[1].y,sv[2].y,sv[3].y);
+    const maxX=Math.max(sv[0].x,sv[1].x,sv[2].x,sv[3].x);
+    const maxY=Math.max(sv[0].y,sv[1].y,sv[2].y,sv[3].y);
     const W=Math.max(1,maxX-minX), H=Math.max(1,maxY-minY);
 
+    ctx.save();
+    ctx.clip();
     if(tex) {
-      ctx.globalAlpha=blockType==='water'?0.6:1;
+      ctx.globalAlpha=isWater?0.6:1;
       ctx.imageSmoothingEnabled=false;
       ctx.drawImage(tex,minX,minY,W,H);
-      // Shade overlay
       if(face.shade<1) {
         ctx.globalAlpha=(1-face.shade)*0.45;
         ctx.fillStyle='#000';
@@ -893,22 +897,23 @@ function drawBlockFace(bx,by,bz,blockType) {
       }
     } else {
       ctx.fillStyle=BLOCK_COLORS[blockType]||BLOCK_COLORS.default;
-      ctx.globalAlpha=blockType==='water'?0.6:1;
+      ctx.globalAlpha=isWater?0.6:1;
       ctx.fill();
       ctx.globalAlpha=(1-face.shade)*0.45;
       ctx.fillStyle='#000';
       ctx.fill();
     }
     ctx.globalAlpha=1;
-    // Subtle edge line
+    ctx.restore();
+
+    // Edge line (no clip needed)
+    ctx.strokeStyle='rgba(0,0,0,0.25)';
+    ctx.lineWidth=0.6;
     ctx.beginPath();
     ctx.moveTo(sv[0].x,sv[0].y);
     for(const v of sv) ctx.lineTo(v.x,v.y);
     ctx.closePath();
-    ctx.strokeStyle='rgba(0,0,0,0.25)';
-    ctx.lineWidth=0.6;
     ctx.stroke();
-    ctx.restore();
   }
 }
 
@@ -918,11 +923,20 @@ function drawSky() {
   ctx.fillStyle=g; ctx.fillRect(0,0,canvas.width,canvas.height);
 }
 
+// Visible block cache — only recompute when position/yaw changes or blocks change
+let _visCache=[], _visCamX=null, _visCamY=null, _visCamZ=null, _visCamYaw=null, _blocksDirty=true;
+function markBlocksDirty(){ _blocksDirty=true; markMinimapDirty(); }
+
 function getVisibleBlocks() {
   const cam=getCamPos();
   const mx=Math.round(cam.pos.x), my=Math.round(cam.pos.y), mz=Math.round(cam.pos.z);
+  const yawBucket=Math.round(cam.yaw*6)/6; // ~30° resolution buckets
+  const moved=mx!==_visCamX||my!==_visCamY||mz!==_visCamZ||yawBucket!==_visCamYaw;
+  if(!moved && !_blocksDirty) return _visCache;
+  _visCamX=mx; _visCamY=my; _visCamZ=mz; _visCamYaw=yawBucket; _blocksDirty=false;
   const rd=RENDER_DISTANCE, out=[];
-  for(let dx=-rd;dx<=rd;dx++) for(let dy=-rd;dy<=rd;dy++) for(let dz=-rd;dz<=rd;dz++) {
+  // Clamp vertical scan — world is flat, no need for full rd vertically
+  for(let dx=-rd;dx<=rd;dx++) for(let dy=-8;dy<=12;dy++) for(let dz=-rd;dz<=rd;dz++) {
     const d2=dx*dx+dy*dy+dz*dz;
     if(d2>rd*rd) continue;
     const key=`${mx+dx},${my+dy},${mz+dz}`;
@@ -931,6 +945,7 @@ function getVisibleBlocks() {
     out.push({bx:mx+dx,by:my+dy,bz:mz+dz,type:blocks.get(key),d2});
   }
   out.sort((a,b)=>b.d2-a.d2);
+  _visCache=out;
   return out;
 }
 
@@ -1077,21 +1092,36 @@ function render() {
 }
 
 // ===================== MINIMAP =====================
+// Minimap cache
+let _minimapCanvas=null, _minimapDirty=true, _minimapFrame=0;
+function markMinimapDirty(){ _minimapDirty=true; }
+
 function drawMinimap() {
   const mc=document.getElementById('minimap-canvas');
-  const mctx=mc.getContext('2d');
   const W=mc.width,H=mc.height,SCALE=0.3;
-  mctx.fillStyle='#0a0a0a'; mctx.fillRect(0,0,W,H);
-  const cam=getCamPos();
-  const cx=cam.pos.x,cz=cam.pos.z,range=W/2*SCALE;
+  _minimapFrame++;
 
-  for(const[key,type] of blocks) {
-    const parts=key.split(','); const bx=+parts[0],bz=+parts[2];
-    const dx=bx-cx,dz=bz-cz;
-    if(Math.abs(dx)>range||Math.abs(dz)>range) continue;
-    mctx.fillStyle=BLOCK_COLORS[type]||'#555';
-    mctx.fillRect(W/2+dx/SCALE,H/2+dz/SCALE,1/SCALE+0.5,1/SCALE+0.5);
+  // Only fully redraw blocks layer every 10 frames or when dirty
+  if(_minimapDirty || _minimapFrame%10===0) {
+    if(!_minimapCanvas){ _minimapCanvas=document.createElement('canvas'); _minimapCanvas.width=W; _minimapCanvas.height=H; }
+    const bctx=_minimapCanvas.getContext('2d');
+    const cam=getCamPos(); const cx=cam.pos.x,cz=cam.pos.z,range=W/2*SCALE;
+    bctx.fillStyle='#0a0a0a'; bctx.fillRect(0,0,W,H);
+    for(const[key,type] of blocks) {
+      const parts=key.split(','); const bx=+parts[0],bz=+parts[2];
+      const dx=bx-cx,dz=bz-cz;
+      if(Math.abs(dx)>range||Math.abs(dz)>range) continue;
+      bctx.fillStyle=BLOCK_COLORS[type]||'#555';
+      bctx.fillRect(W/2+dx/SCALE,H/2+dz/SCALE,1/SCALE+0.5,1/SCALE+0.5);
+    }
+    _minimapDirty=false;
   }
+
+  const mctx=mc.getContext('2d');
+  const cam=getCamPos(); const cx=cam.pos.x,cz=cam.pos.z;
+  if(_minimapCanvas) mctx.drawImage(_minimapCanvas,0,0);
+  else { mctx.fillStyle='#0a0a0a'; mctx.fillRect(0,0,W,H); }
+
   for(const isle of islands) {
     if(!isle||!isle.bedAlive) continue;
     const dx=isle.center.x-cx,dz=isle.center.z-cz;
@@ -1105,7 +1135,6 @@ function drawMinimap() {
     mctx.fillStyle=p.clanId&&p.clanId===myClanId?'#88f':'#f44';
     mctx.fillRect(W/2+dx/SCALE-1.5,H/2+dz/SCALE-1.5,3,3);
   }
-  // Self
   mctx.fillStyle='#fff'; mctx.fillRect(W/2-2,H/2-2,5,5);
   mctx.strokeStyle='#fff'; mctx.lineWidth=1.5;
   mctx.beginPath(); mctx.moveTo(W/2,H/2);
@@ -1215,6 +1244,7 @@ function startBreaking(target) {
     if(breakProgress>=1){
       sendMsg({type:'break_block',pos:breakingBlock});
       blocks.delete(`${breakingBlock.x},${breakingBlock.y},${breakingBlock.z}`);
+      markBlocksDirty();
       stopBreaking();
     }
   },50);
@@ -1310,6 +1340,7 @@ function handleRightClick(){
     if(Math.abs(pp.x-Math.round(me.pos.x))<1&&Math.abs(pp.y-Math.round(me.pos.y))<=1&&Math.abs(pp.z-Math.round(me.pos.z))<1) return;
     sendMsg({type:'place_block',pos:pp,blockType:held.id});
     blocks.set(`${pp.x},${pp.y},${pp.z}`,held.id);
+    markBlocksDirty();
     held.count--; if(held.count<=0) me.hotbar[me.selectedSlot]=null;
     buildHotbar(); return;
   }
@@ -1361,11 +1392,15 @@ function networkTick(){
 }
 
 // ===================== GAME LOOP =====================
-let lastTick=0;
+let lastTick=0, lastRender=0;
 function gameLoop(ts){
   const dt=Math.min(ts-lastTick,100); lastTick=ts;
   if(gameActive){ physicsStep(dt); networkTick(); }
-  render();
+  // Cap at ~60fps - skip render frames if running too fast
+  if(ts-lastRender >= 14) { // ~70fps max
+    render();
+    lastRender=ts;
+  }
   requestAnimationFrame(gameLoop);
 }
 
@@ -1602,7 +1637,7 @@ window.addEventListener('load', async () => {
   if('Notification' in window && Notification.permission==='default') Notification.requestPermission();
 
   // Fetch server info
-  const httpUrl=SERVER_URL.replace('wss://','https://').replace('ws://','http://').replace(/\/?$/,'/');
+  const httpUrl=SERVER_URL.replace('wss://','https://').replace('ws://','http://');
   try {
     const info=await fetch(httpUrl+'info').then(r=>r.json());
     showStatus(`🟢 Server online • ${info.players}/${info.maxPlayers} players • ${info.islandsFree} islands free`);
