@@ -1212,8 +1212,8 @@ function physicsStep(dt) {
 
   const cosY=Math.cos(me.yaw),sinY=Math.sin(me.yaw);
   const sm=me.sprinting?SPRINT_MULT:1;
-  me.vel.x=(mX*cosY+mZ*sinY)*spd*sm;
-  me.vel.z=(-mX*sinY+mZ*cosY)*spd*sm;
+  me.vel.x=(-mX*cosY-mZ*sinY)*spd*sm;
+  me.vel.z=(mX*sinY-mZ*cosY)*spd*sm;
   if(!me.onGround) me.vel.y=Math.max(me.vel.y-GRAVITY*dt,-0.5);
 
   const W=0.35,H=1.8;
@@ -1367,7 +1367,7 @@ let mouseDown=false;
 function requestPointerLock(){ if(gameActive) canvas.requestPointerLock(); }
 
 function getLookDir(){
-  return{x:Math.sin(me.yaw)*Math.cos(me.pitch),y:-Math.sin(me.pitch),z:Math.cos(me.yaw)*Math.cos(me.pitch)};
+  return{x:-Math.sin(me.yaw)*Math.cos(me.pitch),y:-Math.sin(me.pitch),z:-Math.cos(me.yaw)*Math.cos(me.pitch)};
 }
 
 function handleLeftClick(){
