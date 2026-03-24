@@ -1602,7 +1602,7 @@ window.addEventListener('load', async () => {
   if('Notification' in window && Notification.permission==='default') Notification.requestPermission();
 
   // Fetch server info
-  const httpUrl=SERVER_URL.replace('wss://','https://').replace('ws://','http://');
+  const httpUrl=SERVER_URL.replace('wss://','https://').replace('ws://','http://').replace(/\/?$/,'/');
   try {
     const info=await fetch(httpUrl+'info').then(r=>r.json());
     showStatus(`🟢 Server online • ${info.players}/${info.maxPlayers} players • ${info.islandsFree} islands free`);
