@@ -348,7 +348,7 @@ const TEX_NAMES = [
   'bed','missing'
 ];
 
-const ZIP_PATH = '/texture/Bare_Bones_1_13-1_14.zip';
+const ZIP_PATH = 'Bare_Bones_1_13-1_14.zip'; // place zip in same folder as this HTML
 const zipBlobs = {}; // name -> objectURL
 
 // Map from game texture names → zip filenames (1.13+ renamed textures)
@@ -374,55 +374,67 @@ const TEX_REMAP = {
   'speed_potion':'potion','jump_potion':'potion','invisibility_potion':'potion','regen_potion':'potion',
 };
 
+async function extractZipBuffer(buf) {
+  const zip = await JSZip.loadAsync(buf);
+  const loads = [];
+  zip.forEach((relPath, file) => {
+    if (file.dir || !relPath.endsWith('.png')) return;
+    const parts = relPath.split('/');
+    const fname = parts[parts.length - 1].replace('.png', '');
+    loads.push(
+      file.async('blob').then(blob => {
+        zipBlobs[fname] = URL.createObjectURL(blob);
+      })
+    );
+  });
+  await Promise.all(loads);
+  for (const [gameName, zipName] of Object.entries(TEX_REMAP)) {
+    if (zipBlobs[zipName] && !zipBlobs[gameName]) {
+      zipBlobs[gameName] = zipBlobs[zipName];
+    }
+  }
+  showStatus(`✅ Texture pack loaded (${Object.keys(zipBlobs).length} textures)!`);
+  // Reload textures now that blobs are ready
+  await loadTextures();
+}
+
 async function loadTextureZip() {
   showStatus('📦 Loading texture pack...');
   try {
     const resp = await fetch(ZIP_PATH);
     if (!resp.ok) throw new Error('zip not found');
     const buf = await resp.arrayBuffer();
-    const zip = await JSZip.loadAsync(buf);
-    const loads = [];
-    zip.forEach((relPath, file) => {
-      if (file.dir || !relPath.endsWith('.png')) return;
-      const parts = relPath.split('/');
-      const fname = parts[parts.length - 1].replace('.png', '');
-      loads.push(
-        file.async('blob').then(blob => {
-          zipBlobs[fname] = URL.createObjectURL(blob);
-        })
-      );
-    });
-    await Promise.all(loads);
-    // Apply remaps so game names resolve to zip blobs
-    for (const [gameName, zipName] of Object.entries(TEX_REMAP)) {
-      if (zipBlobs[zipName] && !zipBlobs[gameName]) {
-        zipBlobs[gameName] = zipBlobs[zipName];
-      }
-    }
-    showStatus(`✅ Texture pack loaded (${Object.keys(zipBlobs).length} textures)!`);
+    await extractZipBuffer(buf);
   } catch(e) {
-    showStatus('⚠ Texture pack not found — using fallback colors.');
+    // Show a file-picker button so the user can load the zip manually
+    showStatus('⚠ Texture zip not found next to HTML. Use the button below, or play with colored blocks.');
+    const btn = document.createElement('button');
+    btn.textContent = '🗂 Load Bare_Bones_1_13-1_14.zip';
+    btn.style.cssText = 'margin-top:8px;padding:8px 16px;background:#1a1400;border:1px solid #fa0;color:#fa0;border-radius:6px;cursor:pointer;font-family:inherit;font-size:13px;display:block;';
+    btn.onclick = () => {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = '.zip';
+      inp.onchange = async () => {
+        if (!inp.files[0]) return;
+        showStatus('📦 Loading texture pack...');
+        const buf = await inp.files[0].arrayBuffer();
+        await extractZipBuffer(buf);
+        btn.remove();
+      };
+      inp.click();
+    };
+    document.getElementById('server-status').after(btn);
   }
 }
 
 function loadTextures() {
   return Promise.all(TEX_NAMES.map(name => new Promise(resolve => {
-    // Try zip blob first, then fall back to direct file paths
     const blobUrl = zipBlobs[name] || zipBlobs[name+'_top'] || zipBlobs[name+'_side'];
-    const paths = [
-      ...(blobUrl ? [blobUrl] : []),
-      `/texture/assets/minecraft/textures/block/${name}.png`,
-      `/texture/assets/minecraft/textures/item/${name}.png`,
-    ];
-    let i = 0;
-    function tryNext() {
-      if (i >= paths.length) { resolve(); return; }
-      const img = new Image();
-      img.onload = () => { textures[name] = img; resolve(); };
-      img.onerror = () => { i++; tryNext(); };
-      img.src = paths[i++];
-    }
-    tryNext();
+    if (!blobUrl) { resolve(); return; }
+    const img = new Image();
+    img.onload = () => { textures[name] = img; resolve(); };
+    img.onerror = () => resolve();
+    img.src = blobUrl;
   })));
 }
 
@@ -1212,8 +1224,9 @@ function physicsStep(dt) {
 
   const cosY=Math.cos(me.yaw),sinY=Math.sin(me.yaw);
   const sm=me.sprinting?SPRINT_MULT:1;
-  me.vel.x=(-mX*cosY-mZ*sinY)*spd*sm;
-  me.vel.z=(mX*sinY-mZ*cosY)*spd*sm;
+  // Forward (mZ=1) → (-sinY, -cosY), strafe right (mX=1) → (cosY, -sinY)
+  me.vel.x=(-mZ*sinY+mX*cosY)*spd*sm;
+  me.vel.z=(-mZ*cosY-mX*sinY)*spd*sm;
   if(!me.onGround) me.vel.y=Math.max(me.vel.y-GRAVITY*dt,-0.5);
 
   const W=0.35,H=1.8;
