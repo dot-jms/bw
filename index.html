@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bedwars Ultimate</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
 body { background:#000; color:#fff; font-family:'Courier New',monospace; overflow:hidden; user-select:none; }
@@ -252,7 +253,7 @@ canvas { display:block; }
 <script>
 // ===================== CONFIG =====================
 const SERVER_URL = 'wss://bwu-dxw6xv856m17.dot-jms.deno.net/';
-const TEXTURE_BASE = 'textures/';
+const TEXTURE_BASE = '/texture/assets/minecraft/textures/';
 const RENDER_DISTANCE = 24;
 const FOV = 70;
 const GRAVITY = 0.009;
@@ -346,14 +347,43 @@ const TEX_NAMES = [
   'bed','missing'
 ];
 
+const ZIP_PATH = '/texture/Bare_Bones_1_13-1_14.zip';
+const zipBlobs = {}; // name -> objectURL
+
+async function loadTextureZip() {
+  showStatus('📦 Loading texture pack...');
+  try {
+    const resp = await fetch(ZIP_PATH);
+    if (!resp.ok) throw new Error('zip not found');
+    const buf = await resp.arrayBuffer();
+    const zip = await JSZip.loadAsync(buf);
+    const loads = [];
+    zip.forEach((relPath, file) => {
+      if (file.dir || !relPath.endsWith('.png')) return;
+      // Extract texture name from path like assets/minecraft/textures/block/wool.png
+      const parts = relPath.split('/');
+      const fname = parts[parts.length - 1].replace('.png', '');
+      loads.push(
+        file.async('blob').then(blob => {
+          zipBlobs[fname] = URL.createObjectURL(blob);
+        })
+      );
+    });
+    await Promise.all(loads);
+    showStatus(`✅ Texture pack loaded (${Object.keys(zipBlobs).length} textures)!`);
+  } catch(e) {
+    showStatus('⚠ Texture pack not found — using fallback colors.');
+  }
+}
+
 function loadTextures() {
   return Promise.all(TEX_NAMES.map(name => new Promise(resolve => {
+    // Try zip blob first, then fall back to direct file paths
+    const blobUrl = zipBlobs[name] || zipBlobs[name+'_top'] || zipBlobs[name+'_side'];
     const paths = [
-      `${TEXTURE_BASE}${name}.png`,
-      `${TEXTURE_BASE}block/${name}.png`,
-      `${TEXTURE_BASE}item/${name}.png`,
-      `${TEXTURE_BASE}minecraft/textures/block/${name}.png`,
-      `${TEXTURE_BASE}minecraft/textures/item/${name}.png`,
+      ...(blobUrl ? [blobUrl] : []),
+      `/texture/assets/minecraft/textures/block/${name}.png`,
+      `/texture/assets/minecraft/textures/item/${name}.png`,
     ];
     let i = 0;
     function tryNext() {
@@ -1564,6 +1594,7 @@ function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
 // ===================== STARTUP =====================
 window.addEventListener('load', async () => {
   initCanvas(); setupInput();
+  await loadTextureZip();
   await loadTextures();
   requestAnimationFrame(gameLoop);
 
